@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/mattermost/mattermost-server/mlog"
-
 	ber "gopkg.in/asn1-ber.v1"
 )
 
@@ -57,7 +55,7 @@ func (debug debugging) PrintPacket(packet *ber.Packet) {
 	if debug {
 		var b bytes.Buffer
 		printPacket(&b, packet, 0)
-		mlog.Debug(b.String())
+		log.Printf(b.String())
 		ber.PrintPacket(packet)
 	}
 }
