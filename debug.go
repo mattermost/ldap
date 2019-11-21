@@ -21,8 +21,7 @@ func (debug debugging) Printf(format string, args ...interface{}) {
 func (debug debugging) PrintPacket(packet *ber.Packet) {
 	if debug {
 		var b bytes.Buffer
-		WritePacket(&b, packet, 0)
+		ber.WritePacket(&b, packet)
 		log.Printf(b.String())
-		ber.PrintPacket(packet)
 	}
 }
