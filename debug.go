@@ -49,7 +49,6 @@ var tagMap = map[ber.Tag]string{
 // write debug output
 func (debug debugging) Printf(format string, args ...interface{}) {
 	if debug {
-		mlog.Debug(fmt.Sprintf(format, args...))
 		log.Printf(format, args...)
 	}
 }
