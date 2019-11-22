@@ -14,6 +14,7 @@ type debugging bool
 // write debug output
 func (debug debugging) Printf(format string, args ...interface{}) {
 	if debug {
+		format = "ldap-trace: " + format
 		log.Printf(format, args...)
 	}
 }
@@ -22,6 +23,7 @@ func (debug debugging) PrintPacket(packet *ber.Packet) {
 	if debug {
 		var b bytes.Buffer
 		ber.WritePacket(&b, packet)
-		log.Printf(b.String())
+		textToPrint := "ldap-trace: " + b.String()
+		log.Printf(textToPrint)
 	}
 }
