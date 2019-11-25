@@ -1,7 +1,6 @@
 package ldap
 
 import (
-	"bytes"
 	"log"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -19,7 +18,6 @@ func (debug *debugging) Enable(b bool) {
 // Printf writes debug output.
 func (debug debugging) Printf(format string, args ...interface{}) {
 	if debug {
-		format = "ldap-trace: " + format
 		log.Printf(format, args...)
 	}
 }
@@ -27,9 +25,6 @@ func (debug debugging) Printf(format string, args ...interface{}) {
 // PrintPacket dumps a packet.
 func (debug debugging) PrintPacket(packet *ber.Packet) {
 	if debug {
-		var b bytes.Buffer
-		ber.WritePacket(&b, packet)
-		textToPrint := "ldap-trace: " + b.String()
-		log.Printf(textToPrint)
+		ber.PrintPacket(packet)
 	}
 }
