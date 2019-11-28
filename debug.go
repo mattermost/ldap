@@ -7,6 +7,8 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 )
 
+const LDAP_TRACE_PREFIX = "ldap-trace: "
+
 // debugging type
 //     - has a Printf method to write the debug output
 type debugging bool
@@ -19,7 +21,7 @@ func (debug *debugging) Enable(b bool) {
 // Printf writes debug output.
 func (debug debugging) Printf(format string, args ...interface{}) {
 	if debug {
-		format = "ldap-trace: " + format
+		format = LDAP_TRACE_PREFIX + format
 		log.Printf(format, args...)
 	}
 }
@@ -29,7 +31,7 @@ func (debug debugging) PrintPacket(packet *ber.Packet) {
 	if debug {
 		var b bytes.Buffer
 		ber.WritePacket(&b, packet)
-		textToPrint := "ldap-trace: " + b.String()
+		textToPrint := LDAP_TRACE_PREFIX + b.String()
 		log.Printf(textToPrint)
 	}
 }
