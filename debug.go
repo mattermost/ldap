@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"bytes"
+	"io"
 	"log"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -14,7 +15,10 @@ const LDAP_TRACE_PREFIX = "ldap-trace: "
 type debugging bool
 
 // Enable controls debugging mode.
-func (debug *debugging) Enable(b bool) {
+func (debug *debugging) Enable(b bool, out io.Writer) {
+	if b && out != nil {
+		log.SetOutput(out)
+	}
 	*debug = debugging(b)
 }
 
