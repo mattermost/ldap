@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-asn1-ber/asn1-ber"
+	ber "github.com/go-asn1-ber/asn1-ber"
+	"github.com/mattermost/mattermost/server/public/shared/mlog"
 )
 
 func TestUnresponsiveConnection(t *testing.T) {
@@ -352,7 +353,7 @@ func TestRaceDebugConn(t *testing.T) {
 		defer wg.Done()
 		c.conn.Write([]byte(`random stuff`))
 	}()
-	c.Debug = true
+	c.Debug = debugging{logger: mlog.CreateConsoleTestLogger(false, mlog.LvlTrace)}
 
 	wg.Wait()
 }
