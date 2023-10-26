@@ -327,7 +327,6 @@ func (l *Conn) SearchWithPaging(searchRequest *SearchRequest, pagingSize uint32)
 	searchResult := new(SearchResult)
 	for {
 		result, err := l.Search(searchRequest)
-		l.Debug.Log("Looking for Paging Control...")
 		if err != nil {
 			return searchResult, err
 		}
@@ -345,25 +344,21 @@ func (l *Conn) SearchWithPaging(searchRequest *SearchRequest, pagingSize uint32)
 			searchResult.Controls = append(searchResult.Controls, control)
 		}
 
-		l.Debug.Log("Looking for Paging Control...")
 		pagingResult := FindControl(result.Controls, ControlTypePaging)
 		if pagingResult == nil {
 			pagingControl = nil
-			l.Debug.Log("Could not find paging control.  Breaking...")
 			break
 		}
 
 		cookie := pagingResult.(*ControlPaging).Cookie
 		if len(cookie) == 0 {
 			pagingControl = nil
-			l.Debug.Log("Could not find cookie.  Breaking...")
 			break
 		}
 		pagingControl.SetCookie(cookie)
 	}
 
 	if pagingControl != nil {
-		l.Debug.Log("Abandoning Paging...")
 		pagingControl.PagingSize = 0
 		l.Search(searchRequest)
 	}
