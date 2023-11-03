@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+
+	"github.com/mattermost/mattermost/server/public/shared/mlog"
 )
 
 // ExampleConn_Bind demonstrates how to bind a connection to an ldap user
@@ -265,7 +267,12 @@ func Example_vchuppolicy() {
 		log.Fatal(err)
 	}
 	defer l.Close()
-	l.Debug = true
+	logger, err := mlog.NewLogger()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logger.Shutdown()
+	l.Debug.Enable(logger, mlog.LvlDebug)
 
 	bindRequest := NewSimpleBindRequest("cn=admin,dc=example,dc=com", "password", nil)
 
