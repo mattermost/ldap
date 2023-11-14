@@ -353,7 +353,7 @@ func TestRaceDebugConn(t *testing.T) {
 		defer wg.Done()
 		c.conn.Write([]byte(`random stuff`))
 	}()
-	c.Debug = debugging{logger: mlog.CreateConsoleTestLogger(false, mlog.LvlTrace)}
+	c.Debug = debugging{logger: mlog.CreateConsoleTestLogger(t)}
 
 	wg.Wait()
 }

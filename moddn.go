@@ -80,7 +80,7 @@ func (l *Conn) ModifyDN(m *ModifyDNRequest) error {
 			return err
 		}
 	} else {
-		l.Debug.Log("Unexpected Response tag", mlog.Uint64("tag", uint64(tag)))
+		l.Debug.Log("Unexpected Response tag", mlog.Uint("tag", tag))
 	}
 	return nil
 }
