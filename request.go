@@ -36,12 +36,12 @@ func (l *Conn) doRequest(req request) (*messageContext, error) {
 		return nil, err
 	}
 
-	l.Debug.Log("Send package", mlog.Int64("id", msgCtx.id))
+	l.Debug.Log("Send package", mlog.Int("id", msgCtx.id))
 	return msgCtx, nil
 }
 
 func (l *Conn) readPacket(msgCtx *messageContext) (*ber.Packet, error) {
-	l.Debug.Log("Waiting for response", mlog.Int64("id", msgCtx.id))
+	l.Debug.Log("Waiting for response", mlog.Int("id", msgCtx.id))
 	packetResponse, ok := <-msgCtx.responses
 	if !ok {
 		return nil, NewError(ErrorNetwork, errRespChanClosed)
@@ -51,7 +51,7 @@ func (l *Conn) readPacket(msgCtx *messageContext) (*ber.Packet, error) {
 		if err := addLDAPDescriptions(packet); err != nil {
 			return nil, err
 		}
-		l.Debug.Log("Got response", mlog.Int64("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
+		l.Debug.Log("Got response", mlog.Int("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
 	}
 
 	if err != nil {

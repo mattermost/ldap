@@ -94,7 +94,7 @@ func (l *Conn) Add(addRequest *AddRequest) error {
 			return err
 		}
 	} else {
-		l.Debug.Log("Unexpected Response", mlog.Uint64("tag", uint64(tag)))
+		l.Debug.Log("Unexpected Response", mlog.Uint("tag", tag))
 	}
 	return nil
 }

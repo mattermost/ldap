@@ -260,7 +260,7 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	}
 	defer l.finishMessage(msgCtx)
 
-	l.Debug.Log("Waiting for StartTLS response", mlog.Int64("id", msgCtx.id))
+	l.Debug.Log("Waiting for StartTLS response", mlog.Int("id", msgCtx.id))
 
 	packetResponse, ok := <-msgCtx.responses
 	if !ok {
@@ -273,7 +273,7 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 			return err
 		}
 
-		l.Debug.Log("Got response %p", mlog.Err(err), mlog.Int64("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
+		l.Debug.Log("Got response %p", mlog.Err(err), mlog.Int("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
 	}
 
 	if err != nil {
@@ -392,7 +392,7 @@ func (l *Conn) processMessages() {
 			if l.IsClosing() && l.closeErr.Load() != nil {
 				msgCtx.sendResponse(&PacketResponse{Error: l.closeErr.Load().(error)})
 			}
-			l.Debug.Log("Closing channel for MessageID", mlog.Int64("message_id", messageID))
+			l.Debug.Log("Closing channel for MessageID", mlog.Int("message_id", messageID))
 			close(msgCtx.responses)
 			delete(l.messageContexts, messageID)
 		}
@@ -448,7 +448,7 @@ func (l *Conn) processMessages() {
 				} else {
 					l.Debug.Log(
 						"Received unexpected message",
-						mlog.Int64("message_id", message.MessageID),
+						mlog.Int("message_id", message.MessageID),
 						mlog.Bool("is_closing", l.IsClosing()),
 						PacketToField(message.Packet),
 					)
@@ -457,13 +457,13 @@ func (l *Conn) processMessages() {
 				// Handle the timeout by closing the channel
 				// All reads will return immediately
 				if msgCtx, ok := l.messageContexts[message.MessageID]; ok {
-					l.Debug.Log("Receiving message timeout", mlog.Int64("message_id", message.MessageID))
+					l.Debug.Log("Receiving message timeout", mlog.Int("message_id", message.MessageID))
 					msgCtx.sendResponse(&PacketResponse{message.Packet, errors.New("ldap: connection timed out")})
 					delete(l.messageContexts, message.MessageID)
 					close(msgCtx.responses)
 				}
 			case MessageFinish:
-				l.Debug.Log("Finished message", mlog.Int64("message_id", message.MessageID))
+				l.Debug.Log("Finished message", mlog.Int("message_id", message.MessageID))
 				if msgCtx, ok := l.messageContexts[message.MessageID]; ok {
 					delete(l.messageContexts, message.MessageID)
 					close(msgCtx.responses)
