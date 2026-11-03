@@ -59,6 +59,39 @@ func TestUnresponsiveConnection(t *testing.T) {
 	}
 }
 
+// TestUnresponsiveConnectionWithDebug checks that a timed-out request reports the timeout when debug
+// logging is on, rather than a recovered panic from describing the missing response packet.
+func TestUnresponsiveConnectionWithDebug(t *testing.T) {
+	// The do-nothing server that accepts requests and does nothing
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	defer ts.Close()
+
+	for name, request := range map[string]func(*Conn) error{
+		"Bind":     func(conn *Conn) error { return conn.Bind("cn=admin", "password") },
+		"StartTLS": func(conn *Conn) error { return conn.StartTLS(nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, err := Dial(ts.Listener.Addr().Network(), ts.Listener.Addr().String())
+			if err != nil {
+				t.Fatalf("error connecting to localhost tcp: %v", err)
+			}
+			conn.Debug.Enable(mlog.CreateConsoleTestLogger(t), mlog.LvlLDAPTrace)
+			conn.Start()
+			conn.SetTimeout(10 * time.Millisecond)
+			defer conn.Close()
+
+			err = request(conn)
+			if err == nil {
+				t.Fatalf("expected timeout error")
+			}
+			if err.Error() != "ldap: connection timed out" {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 // TestFinishMessage tests that we do not enter deadlock when a goroutine makes
 // a request but does not handle all responses from the server.
 func TestFinishMessage(t *testing.T) {

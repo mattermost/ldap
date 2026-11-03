@@ -47,19 +47,22 @@ func (l *Conn) readPacket(msgCtx *messageContext) (*ber.Packet, error) {
 		return nil, NewError(ErrorNetwork, errRespChanClosed)
 	}
 	packet, err := packetResponse.ReadPacket()
-	if l.Debug.Enabled() {
-		if err := addLDAPDescriptions(packet); err != nil {
-			return nil, err
-		}
-		l.Debug.Log("Got response", mlog.Int("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
-	}
-
+	// Check the error before describing the packet: a failed response, such as a timeout, has no packet,
+	// and describing it would replace the real error with a recovered nil pointer dereference.
 	if err != nil {
+		l.Debug.Log("Got error response", mlog.Int("id", msgCtx.id), mlog.Err(err))
 		return nil, err
 	}
 
 	if packet == nil {
 		return nil, NewError(ErrorNetwork, errCouldNotRetMsg)
+	}
+
+	if l.Debug.Enabled() {
+		if err := addLDAPDescriptions(packet); err != nil {
+			return nil, err
+		}
+		l.Debug.Log("Got response", mlog.Int("id", msgCtx.id), PacketToField(packet))
 	}
 
 	return packet, nil

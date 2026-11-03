@@ -267,17 +267,19 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 		return NewError(ErrorNetwork, errors.New("ldap: response channel closed"))
 	}
 	packet, err = packetResponse.ReadPacket()
+	// As in readPacket, check the error before describing the packet, which a failed response does not have.
+	if err != nil {
+		l.Debug.Log("Got StartTLS error response", mlog.Int("id", msgCtx.id), mlog.Err(err))
+		return err
+	}
+
 	if l.Debug.Enabled() {
 		if err := addLDAPDescriptions(packet); err != nil {
 			l.Close()
 			return err
 		}
 
-		l.Debug.Log("Got response %p", mlog.Err(err), mlog.Int("id", msgCtx.id), PacketToField(packet), mlog.Err(err))
-	}
-
-	if err != nil {
-		return err
+		l.Debug.Log("Got StartTLS response", mlog.Int("id", msgCtx.id), PacketToField(packet))
 	}
 
 	if err := GetLDAPError(packet); err == nil {
