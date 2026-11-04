@@ -88,6 +88,9 @@ func TestUnresponsiveConnectionWithDebug(t *testing.T) {
 			if err.Error() != "ldap: connection timed out" {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if name == "StartTLS" && !conn.IsClosing() {
+				t.Fatalf("expected a failed StartTLS to close the connection")
+			}
 		})
 	}
 }

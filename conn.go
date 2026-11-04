@@ -270,6 +270,9 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	// As in readPacket, check the error before describing the packet, which a failed response does not have.
 	if err != nil {
 		l.Debug.Log("Got StartTLS error response", mlog.Int("id", msgCtx.id), mlog.Err(err))
+		// The server may still accept StartTLS after a timeout and then expect a TLS handshake,
+		// so the connection can't be used for further plaintext requests.
+		l.Close()
 		return err
 	}
 
