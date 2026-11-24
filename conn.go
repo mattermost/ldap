@@ -258,7 +258,14 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err != nil {
 		return err
 	}
-	defer l.finishMessage(msgCtx)
+	// Finish the message before closing, or a request timeout still waiting to be delivered blocks Close.
+	closeConn := false
+	defer func() {
+		l.finishMessage(msgCtx)
+		if closeConn {
+			l.Close()
+		}
+	}()
 
 	l.Debug.Log("Waiting for StartTLS response", mlog.Int("id", msgCtx.id))
 
@@ -272,13 +279,13 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 		l.Debug.Log("Got StartTLS error response", mlog.Int("id", msgCtx.id), mlog.Err(err))
 		// The server may still accept StartTLS after a timeout and then expect a TLS handshake,
 		// so the connection can't be used for further plaintext requests.
-		l.Close()
+		closeConn = true
 		return err
 	}
 
 	if l.Debug.Enabled() {
 		if err := addLDAPDescriptions(packet); err != nil {
-			l.Close()
+			closeConn = true
 			return err
 		}
 
@@ -288,8 +295,17 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err := GetLDAPError(packet); err == nil {
 		conn := tls.Client(l.conn, config)
 
-		if connErr := conn.Handshake(); connErr != nil {
-			l.Close()
+		// The request timeout cannot bound the handshake, which runs outside the message loop.
+		timeout := time.Duration(atomic.LoadInt64(&l.requestTimeout))
+		if timeout > 0 {
+			_ = l.conn.SetDeadline(time.Now().Add(timeout))
+		}
+		connErr := conn.Handshake()
+		if timeout > 0 {
+			_ = l.conn.SetDeadline(time.Time{})
+		}
+		if connErr != nil {
+			closeConn = true
 			return NewError(ErrorNetwork, fmt.Errorf("TLS handshake failed (%v)", connErr))
 		}
 
@@ -351,7 +367,9 @@ func (l *Conn) sendMessageWithFlags(packet *ber.Packet, flags sendMessageFlags) 
 			responses: responses,
 		},
 	}
-	l.sendProcessMessage(message)
+	if !l.sendProcessMessage(message) {
+		return nil, NewError(ErrorNetwork, errors.New("ldap: connection closed"))
+	}
 	return message.Context, nil
 }
 

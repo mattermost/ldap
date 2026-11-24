@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -392,4 +393,52 @@ func TestRaceDebugConn(t *testing.T) {
 	c.Debug = debugging{logger: mlog.CreateConsoleTestLogger(t)}
 
 	wg.Wait()
+}
+
+func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("error listening: %v", err)
+	}
+	defer l.Close()
+
+	go func() {
+		server, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer server.Close()
+
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		response := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
+		response.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, request.Children[0].Value, "MessageID"))
+		extendedResponse := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ApplicationExtendedResponse, nil, "Extended Response")
+		extendedResponse.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, LDAPResultSuccess, "resultCode"))
+		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
+		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
+		response.AppendChild(extendedResponse)
+		if _, err := server.Write(response.Bytes()); err != nil {
+			return
+		}
+
+		_, _ = io.Copy(io.Discard, server)
+	}()
+
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("error connecting: %v", err)
+	}
+	conn := NewConn(c, false)
+	conn.SetTimeout(100 * time.Millisecond)
+	conn.Start()
+	defer conn.Close()
+
+	runWithTimeout(t, 5*time.Second, func() {
+		if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: true}); err == nil {
+			t.Error("expected a stalled TLS handshake to fail")
+		}
+	})
 }
