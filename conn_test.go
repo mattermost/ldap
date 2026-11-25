@@ -461,3 +461,47 @@ func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
 		t.Fatal("StartTLS did not time out a stalled TLS handshake")
 	}
 }
+
+// A request racing Close must fail rather than wait on a response that never comes.
+func TestSendMessageToClosingConnection(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	conn := NewConn(client, false)
+
+	packet := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Request")
+	packet.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(1), "MessageID"))
+
+	type result struct {
+		msgCtx *messageContext
+		err    error
+	}
+	results := make(chan result, 1)
+	conn.messageMutex.Lock()
+	go func() {
+		msgCtx, err := conn.sendMessageWithFlags(packet, startTLS)
+		results <- result{msgCtx, err}
+	}()
+	waitForGoroutineBlockedOnMutex(t, "sendMessageWithFlags")
+	conn.setClosing()
+	conn.messageMutex.Unlock()
+
+	r := <-results
+	if r.err == nil || r.msgCtx != nil {
+		t.Fatalf("expected a connection closed error, got %v", r.err)
+	}
+}
+
+// waitForGoroutineBlockedOnMutex waits until a goroutine running function is blocked acquiring a mutex.
+func waitForGoroutineBlockedOnMutex(t *testing.T, function string) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		for _, goroutine := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(goroutine, "[sync.Mutex.Lock") && strings.Contains(goroutine, function) {
+				return
+			}
+		}
+	}
+	t.Fatalf("no goroutine in %s blocked on a mutex", function)
+}
