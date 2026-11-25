@@ -175,6 +175,10 @@ func DialURL(addr string) (*Conn, error) {
 }
 
 // NewConn returns a new Conn using conn for network I/O.
+//
+// The Conn takes ownership of conn: callers should not read, write or set deadlines on it afterwards.
+// When a request timeout is set, StartTLS replaces any deadline on conn for the TLS handshake and then
+// clears it.
 func NewConn(conn net.Conn, isTLS bool) *Conn {
 	return &Conn{
 		conn:            conn,
@@ -225,7 +229,9 @@ func (l *Conn) Close() {
 	l.wgClose.Wait()
 }
 
-// SetTimeout sets the time after a request is sent that a MessageTimeout triggers
+// SetTimeout sets how long each request waits for its response after being sent before failing with
+// "ldap: connection timed out". It also bounds the TLS handshake in StartTLS. A nonpositive timeout is
+// ignored, so a timeout cannot be removed once set.
 func (l *Conn) SetTimeout(timeout time.Duration) {
 	if timeout > 0 {
 		atomic.StoreInt64(&l.requestTimeout, int64(timeout))
@@ -240,7 +246,12 @@ func (l *Conn) nextMessageID() int64 {
 	return 0
 }
 
-// StartTLS sends the command to start a TLS session and then creates a new TLS Client
+// StartTLS sends the command to start a TLS session and then creates a new TLS Client.
+//
+// With a request timeout set, both the wait for the server's response and the TLS handshake are bounded
+// by it. If the response fails, such as on a timeout, or the handshake fails, StartTLS closes the
+// connection, since the server may already expect TLS. If the server refuses StartTLS with an LDAP
+// result, the connection is left open.
 func (l *Conn) StartTLS(config *tls.Config) error {
 	if l.isTLS {
 		return NewError(ErrorNetwork, errors.New("ldap: already encrypted"))
