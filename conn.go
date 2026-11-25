@@ -306,29 +306,31 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 		l.Debug.Log("Got StartTLS response", mlog.Int("id", msgCtx.id), PacketToField(packet))
 	}
 
-	if err := GetLDAPError(packet); err == nil {
-		conn := tls.Client(l.conn, config)
-
-		// If a request timeout is set, use it as a deadline on the TLS handshake, then clear the deadline.
-		// The request timer can't stop the handshake, because the handshake reads the socket directly.
-		timeout := time.Duration(atomic.LoadInt64(&l.requestTimeout))
-		if timeout > 0 {
-			_ = l.conn.SetDeadline(time.Now().Add(timeout))
-		}
-		connErr := conn.Handshake()
-		if timeout > 0 {
-			_ = l.conn.SetDeadline(time.Time{})
-		}
-		if connErr != nil {
-			closeConn = true
-			return NewError(ErrorNetwork, fmt.Errorf("TLS handshake failed (%v)", connErr))
-		}
-
-		l.isTLS = true
-		l.conn = conn
-	} else {
+	if err := GetLDAPError(packet); err != nil {
+		// The reader stopped after reading the StartTLS response, so restart it for the plaintext connection.
+		go l.reader()
 		return err
 	}
+
+	conn := tls.Client(l.conn, config)
+
+	// If a request timeout is set, use it as a deadline on the TLS handshake, then clear the deadline.
+	// The request timer can't stop the handshake, because the handshake reads the socket directly.
+	timeout := time.Duration(atomic.LoadInt64(&l.requestTimeout))
+	if timeout > 0 {
+		_ = l.conn.SetDeadline(time.Now().Add(timeout))
+	}
+	connErr := conn.Handshake()
+	if timeout > 0 {
+		_ = l.conn.SetDeadline(time.Time{})
+	}
+	if connErr != nil {
+		closeConn = true
+		return NewError(ErrorNetwork, fmt.Errorf("TLS handshake failed (%v)", connErr))
+	}
+
+	l.isTLS = true
+	l.conn = conn
 	go l.reader()
 
 	return nil

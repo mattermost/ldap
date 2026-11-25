@@ -532,6 +532,41 @@ func TestStartTLSUndescribableResponseClosesConnection(t *testing.T) {
 	assertStartTLSGuard(t, conn, true)
 }
 
+func TestStartTLSRefusedLeavesConnectionUsable(t *testing.T) {
+	conn := newFakeServerConn(t, func(server net.Conn) {
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		if err := writeLDAPResult(server, request, ApplicationExtendedResponse, LDAPResultUnavailable); err != nil {
+			return
+		}
+		request, err = ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		if err := writeLDAPResult(server, request, ApplicationBindResponse, LDAPResultSuccess); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, server)
+	})
+	conn.SetTimeout(time.Second)
+	conn.Start()
+
+	err := conn.StartTLS(&tls.Config{InsecureSkipVerify: true})
+	if !IsErrorWithCode(err, LDAPResultUnavailable) {
+		t.Fatalf("expected StartTLS to be refused as unavailable, got %v", err)
+	}
+	if conn.IsClosing() {
+		t.Fatal("expected a refused StartTLS to leave the connection open")
+	}
+	assertStartTLSGuard(t, conn, false)
+
+	if err := conn.Bind("cn=admin", "password"); err != nil {
+		t.Fatalf("expected a Bind after a refused StartTLS to succeed, got %v", err)
+	}
+}
+
 func TestStartTLSClearsHandshakeDeadline(t *testing.T) {
 	cert := generateTestCertificate(t)
 	conn := newFakeServerConn(t, func(server net.Conn) {
