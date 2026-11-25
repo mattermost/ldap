@@ -52,7 +52,7 @@ func (pr *PacketResponse) ReadPacket() (*ber.Packet, error) {
 
 type messageContext struct {
 	id int64
-	// close(done) should only be called from finishMessage()
+	// close(done) should only be called from finishMessage(), or from StartTLS when the handshake fails
 	done chan struct{}
 	// close(responses) should only be called from processMessages(), and only sent to from sendResponse()
 	responses chan *PacketResponse
@@ -175,6 +175,8 @@ func DialURL(addr string) (*Conn, error) {
 }
 
 // NewConn returns a new Conn using conn for network I/O.
+//
+// When a request timeout is set, StartTLS replaces any deadline on conn for the TLS handshake and then clears it.
 func NewConn(conn net.Conn, isTLS bool) *Conn {
 	return &Conn{
 		conn:            conn,
@@ -258,7 +260,12 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err != nil {
 		return err
 	}
-	defer l.finishMessage(msgCtx)
+	handshakeFailed := false
+	defer func() {
+		if !handshakeFailed {
+			l.finishMessage(msgCtx)
+		}
+	}()
 
 	l.Debug.Log("Waiting for StartTLS response", mlog.Int("id", msgCtx.id))
 
@@ -288,7 +295,20 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err := GetLDAPError(packet); err == nil {
 		conn := tls.Client(l.conn, config)
 
-		if connErr := conn.Handshake(); connErr != nil {
+		// The request timer can't interrupt the handshake, which reads the socket directly.
+		timeout := time.Duration(atomic.LoadInt64(&l.requestTimeout))
+		if timeout > 0 {
+			_ = l.conn.SetDeadline(time.Now().Add(timeout))
+		}
+		connErr := conn.Handshake()
+		if timeout > 0 {
+			_ = l.conn.SetDeadline(time.Time{})
+		}
+		if connErr != nil {
+			// Close done first, or a pending request timeout blocks Close. Skip the rest of finishMessage so
+			// isStartingTLS stays set and no concurrent request reaches the plaintext socket.
+			handshakeFailed = true
+			close(msgCtx.done)
 			l.Close()
 			return NewError(ErrorNetwork, fmt.Errorf("TLS handshake failed (%v)", connErr))
 		}

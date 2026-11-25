@@ -2,12 +2,14 @@ package ldap
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,4 +394,70 @@ func TestRaceDebugConn(t *testing.T) {
 	c.Debug = debugging{logger: mlog.CreateConsoleTestLogger(t)}
 
 	wg.Wait()
+}
+
+func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("error listening: %v", err)
+	}
+	defer l.Close()
+
+	go func() {
+		server, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer server.Close()
+
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		// Answering late makes the request timeout fire while the handshake is still waiting on its deadline.
+		time.Sleep(200 * time.Millisecond)
+		response := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
+		response.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, request.Children[0].Value, "MessageID"))
+		extendedResponse := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ApplicationExtendedResponse, nil, "Extended Response")
+		extendedResponse.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, LDAPResultSuccess, "resultCode"))
+		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
+		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
+		response.AppendChild(extendedResponse)
+		if _, err := server.Write(response.Bytes()); err != nil {
+			return
+		}
+
+		_, _ = io.Copy(io.Discard, server)
+	}()
+
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("error connecting: %v", err)
+	}
+	// Closing the socket rather than the Conn unblocks a hung handshake without risking a deadlock in Close.
+	defer c.Close()
+	conn := NewConn(c, false)
+	conn.SetTimeout(time.Second)
+	conn.Start()
+
+	result := make(chan error, 1)
+	go func() { result <- conn.StartTLS(&tls.Config{InsecureSkipVerify: true}) }()
+
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "TLS handshake failed") {
+			t.Fatalf("expected a TLS handshake failure, got %v", err)
+		}
+		if !conn.IsClosing() {
+			t.Fatal("expected StartTLS to close the connection after a failed handshake")
+		}
+		conn.messageMutex.Lock()
+		startingTLS := conn.isStartingTLS
+		conn.messageMutex.Unlock()
+		if !startingTLS {
+			t.Fatal("expected the StartTLS guard to stay set after a failed handshake")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartTLS did not time out a stalled TLS handshake")
+	}
 }
