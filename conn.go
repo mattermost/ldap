@@ -306,7 +306,8 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err := GetLDAPError(packet); err == nil {
 		conn := tls.Client(l.conn, config)
 
-		// The request timeout cannot bound the handshake, which runs outside the message loop.
+		// If a request timeout is set, use it as a deadline on the TLS handshake, then clear the deadline.
+		// The request timer can't stop the handshake, because the handshake reads the socket directly.
 		timeout := time.Duration(atomic.LoadInt64(&l.requestTimeout))
 		if timeout > 0 {
 			_ = l.conn.SetDeadline(time.Now().Add(timeout))
