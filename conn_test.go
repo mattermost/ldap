@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -431,14 +432,24 @@ func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error connecting: %v", err)
 	}
+	// Closing the socket rather than the Conn unblocks a hung handshake without risking a deadlock in Close.
+	defer c.Close()
 	conn := NewConn(c, false)
-	conn.SetTimeout(100 * time.Millisecond)
+	conn.SetTimeout(time.Second)
 	conn.Start()
-	defer conn.Close()
 
-	runWithTimeout(t, 5*time.Second, func() {
-		if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: true}); err == nil {
-			t.Error("expected a stalled TLS handshake to fail")
+	result := make(chan error, 1)
+	go func() { result <- conn.StartTLS(&tls.Config{InsecureSkipVerify: true}) }()
+
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "TLS handshake failed") {
+			t.Fatalf("expected a TLS handshake failure, got %v", err)
 		}
-	})
+		if !conn.IsClosing() {
+			t.Fatal("expected StartTLS to close the connection after a failed handshake")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartTLS did not time out a stalled TLS handshake")
+	}
 }
