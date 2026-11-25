@@ -52,7 +52,7 @@ func (pr *PacketResponse) ReadPacket() (*ber.Packet, error) {
 
 type messageContext struct {
 	id int64
-	// close(done) should only be called from finishMessage()
+	// close(done) should only be called from finishMessage(), or from StartTLS before it closes the connection
 	done chan struct{}
 	// close(responses) should only be called from processMessages(), and only sent to from sendResponse()
 	responses chan *PacketResponse
@@ -269,13 +269,16 @@ func (l *Conn) StartTLS(config *tls.Config) error {
 	if err != nil {
 		return err
 	}
-	// Finish the message before closing, or a request timeout still waiting to be delivered blocks Close.
 	closeConn := false
 	defer func() {
-		l.finishMessage(msgCtx)
-		if closeConn {
-			l.Close()
+		if !closeConn {
+			l.finishMessage(msgCtx)
+			return
 		}
+		// Release a request timeout still waiting to be delivered, or it blocks Close. Leave isStartingTLS set
+		// until Close marks the connection as closing, so no concurrent request reaches the plaintext socket.
+		close(msgCtx.done)
+		l.Close()
 	}()
 
 	l.Debug.Log("Waiting for StartTLS response", mlog.Int("id", msgCtx.id))

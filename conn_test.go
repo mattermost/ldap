@@ -449,6 +449,12 @@ func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
 		if !conn.IsClosing() {
 			t.Fatal("expected StartTLS to close the connection after a failed handshake")
 		}
+		conn.messageMutex.Lock()
+		startingTLS := conn.isStartingTLS
+		conn.messageMutex.Unlock()
+		if !startingTLS {
+			t.Fatal("expected the StartTLS guard to stay set after a failed handshake")
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("StartTLS did not time out a stalled TLS handshake")
 	}
