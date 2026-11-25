@@ -2,9 +2,14 @@ package ldap
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -90,8 +95,11 @@ func TestUnresponsiveConnectionWithDebug(t *testing.T) {
 			if err.Error() != "ldap: connection timed out" {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if name == "StartTLS" && !conn.IsClosing() {
-				t.Fatalf("expected a failed StartTLS to close the connection")
+			if name == "StartTLS" {
+				if !conn.IsClosing() {
+					t.Fatalf("expected a failed StartTLS to close the connection")
+				}
+				assertStartTLSGuard(t, conn, true)
 			}
 		})
 	}
@@ -396,12 +404,14 @@ func TestRaceDebugConn(t *testing.T) {
 	wg.Wait()
 }
 
-func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
+// newFakeServerConn returns a Conn whose server side is handled by serve.
+func newFakeServerConn(t *testing.T, serve func(server net.Conn)) *Conn {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("error listening: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { l.Close() })
 
 	go func() {
 		server, err := l.Accept()
@@ -409,32 +419,70 @@ func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
 			return
 		}
 		defer server.Close()
-
-		request, err := ber.ReadPacket(server)
-		if err != nil {
-			return
-		}
-		response := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
-		response.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, request.Children[0].Value, "MessageID"))
-		extendedResponse := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ApplicationExtendedResponse, nil, "Extended Response")
-		extendedResponse.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, LDAPResultSuccess, "resultCode"))
-		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
-		extendedResponse.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
-		response.AppendChild(extendedResponse)
-		if _, err := server.Write(response.Bytes()); err != nil {
-			return
-		}
-
-		_, _ = io.Copy(io.Discard, server)
+		serve(server)
 	}()
 
 	c, err := net.Dial("tcp", l.Addr().String())
 	if err != nil {
 		t.Fatalf("error connecting: %v", err)
 	}
-	// Closing the socket rather than the Conn unblocks a hung handshake without risking a deadlock in Close.
-	defer c.Close()
-	conn := NewConn(c, false)
+	// Closing the socket rather than the Conn unblocks a hung request without risking a deadlock in Close.
+	t.Cleanup(func() { c.Close() })
+	return NewConn(c, false)
+}
+
+func writeLDAPResult(w io.Writer, request *ber.Packet, application ber.Tag, resultCode uint16) error {
+	response := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
+	response.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, request.Children[0].Value, "MessageID"))
+	result := ber.Encode(ber.ClassApplication, ber.TypeConstructed, application, nil, "Result")
+	result.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, uint64(resultCode), "resultCode"))
+	result.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
+	result.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
+	response.AppendChild(result)
+	_, err := w.Write(response.Bytes())
+	return err
+}
+
+func generateTestCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("error creating certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func assertStartTLSGuard(t *testing.T, conn *Conn, want bool) {
+	t.Helper()
+	conn.messageMutex.Lock()
+	startingTLS := conn.isStartingTLS
+	conn.messageMutex.Unlock()
+	if startingTLS != want {
+		t.Fatalf("expected isStartingTLS to be %v, got %v", want, startingTLS)
+	}
+}
+
+func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
+	conn := newFakeServerConn(t, func(server net.Conn) {
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		if err := writeLDAPResult(server, request, ApplicationExtendedResponse, LDAPResultSuccess); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, server)
+	})
 	conn.SetTimeout(time.Second)
 	conn.Start()
 
@@ -449,13 +497,79 @@ func TestStartTLSStalledHandshakeTimesOut(t *testing.T) {
 		if !conn.IsClosing() {
 			t.Fatal("expected StartTLS to close the connection after a failed handshake")
 		}
-		conn.messageMutex.Lock()
-		startingTLS := conn.isStartingTLS
-		conn.messageMutex.Unlock()
-		if !startingTLS {
-			t.Fatal("expected the StartTLS guard to stay set after a failed handshake")
-		}
+		// Clearing the guard before the connection is closing would let a concurrent request, such as a
+		// Bind, reach the plaintext socket.
+		assertStartTLSGuard(t, conn, true)
 	case <-time.After(10 * time.Second):
 		t.Fatal("StartTLS did not time out a stalled TLS handshake")
+	}
+}
+
+func TestStartTLSUndescribableResponseClosesConnection(t *testing.T) {
+	conn := newFakeServerConn(t, func(server net.Conn) {
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		response := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
+		response.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, request.Children[0].Value, "MessageID"))
+		if _, err := server.Write(response.Bytes()); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, server)
+	})
+	conn.Debug.Enable(mlog.CreateConsoleTestLogger(t), mlog.LvlLDAPTrace)
+	conn.SetTimeout(time.Second)
+	conn.Start()
+
+	err := conn.StartTLS(&tls.Config{InsecureSkipVerify: true})
+	if !IsErrorWithCode(err, ErrorDebugging) {
+		t.Fatalf("expected a debugging error, got %v", err)
+	}
+	if !conn.IsClosing() {
+		t.Fatal("expected StartTLS to close the connection after an undescribable response")
+	}
+	assertStartTLSGuard(t, conn, true)
+}
+
+func TestStartTLSClearsHandshakeDeadline(t *testing.T) {
+	cert := generateTestCertificate(t)
+	conn := newFakeServerConn(t, func(server net.Conn) {
+		request, err := ber.ReadPacket(server)
+		if err != nil {
+			return
+		}
+		if err := writeLDAPResult(server, request, ApplicationExtendedResponse, LDAPResultSuccess); err != nil {
+			return
+		}
+		tlsServer := tls.Server(server, &tls.Config{Certificates: []tls.Certificate{cert}})
+		if err := tlsServer.Handshake(); err != nil {
+			return
+		}
+		request, err = ber.ReadPacket(tlsServer)
+		if err != nil {
+			return
+		}
+		if err := writeLDAPResult(tlsServer, request, ApplicationBindResponse, LDAPResultSuccess); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, tlsServer)
+	})
+	const timeout = 100 * time.Millisecond
+	conn.SetTimeout(timeout)
+	conn.Start()
+
+	if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("expected StartTLS to succeed, got %v", err)
+	}
+
+	// Outlast the handshake deadline, which would fail the idle reader if it were left on the socket.
+	time.Sleep(3 * timeout)
+
+	if conn.IsClosing() {
+		t.Fatal("expected the connection to stay open after the handshake deadline passed")
+	}
+	if err := conn.Bind("cn=admin", "password"); err != nil {
+		t.Fatalf("expected a Bind over TLS to succeed, got %v", err)
 	}
 }
